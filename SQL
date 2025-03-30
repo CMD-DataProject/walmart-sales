@@ -1,0 +1,200 @@
+code clean: 
+# CREATE TABLE
+CREATE DATABASE sales_data;
+USE sales_data;
+# IMPORT THE DATA IN CSV FORMAT WITH THE TABLE WIZARD. THE DATE IS SHOWING AS TEXT SO GETS CHANGED AS DATATIME
+## Create a backup table.
+CREATE TABLE walmart_sales_backup AS
+SELECT *
+FROM walmart_sales;
+# CLEAN THE DATA
+
+## Remove rows with NULL or blank values in important columns
+SET SQL_SAFE_UPDATES = 0;
+DELETE FROM walmart_sales_backup
+WHERE 
+    store IS NULL OR TRIM(store) = ''
+    OR date IS NULL OR TRIM(date) = ''
+    OR weekly_sales IS NULL OR TRIM(weekly_sales) = ''
+    OR holiday_flag IS NULL OR TRIM(holiday_flag) = ''
+    OR temperature IS NULL OR TRIM(temperature) = ''
+    OR fuel_price IS NULL OR TRIM(fuel_price) = ''
+    OR cpi IS NULL OR TRIM(cpi) = ''
+    OR unemployment IS NULL OR TRIM(unemployment) = '';
+SET SQL_SAFE_UPDATES = 1;
+SELECT * FROM walmart_sales_backup LIMIT 10
+## REMOVE Duplicates
+### Add a new column to show the groups
+ALTER TABLE walmart_sales_backup
+ADD COLUMN combination_count INT;
+### Store the count in the new column
+UPDATE walmart_sales_backup t1
+JOIN (
+  SELECT 
+    Store, 
+    Date, 
+    Weekly_Sales, 
+    Holiday_Flag, 
+    Temperature, 
+    Fuel_Price, 
+    CPI, 
+    Unemployment, 
+    COUNT(*) AS combination_count
+  FROM walmart_sales_backup
+  GROUP BY 
+    Store, 
+    Date, 
+    Weekly_Sales, 
+    Holiday_Flag, 
+    Temperature, 
+    Fuel_Price, 
+    CPI, 
+    Unemployment
+) t2
+ON t1.Store = t2.Store
+   AND t1.Date = t2.Date
+   AND t1.Weekly_Sales = t2.Weekly_Sales
+   AND t1.Holiday_Flag = t2.Holiday_Flag
+   AND t1.Temperature = t2.Temperature
+   AND t1.Fuel_Price = t2.Fuel_Price
+   AND t1.CPI = t2.CPI
+   AND t1.Unemployment = t2.Unemployment
+SET t1.combination_count = t2.combination_count;
+### CHECK results
+SELECT * FROM walmart_sales_backup LIMIT 10
+### Double Check how many options are in the combination column, if this is different to 1, there are duplicates.
+SELECT DISTINCT combination_count
+FROM walmart_sales_backup;
+
+## TRIM leading and trailing spaces in all columns.
+UPDATE walmart_sales_backup
+SET 
+    store = TRIM(store),
+    data = TRIM(data),
+    weekly_sales = TRIM(weekly_sales),
+    holiday_flag = TRIM(holiday_flag),
+    temperature = TRIM(temperature),
+    fuel_price = TRIM(fuel_price),
+    cpi = TRIM(cpi),
+    unemployment = TRIM(unemployment);
+
+## CHECK OUTLIERS WITH MAX AND MIN: Create a procedure to calculate the max and the min so we can pass the same formula to the different columns
+DELIMITER //
+CREATE PROCEDURE calculate_max_min(
+    IN column_name VARCHAR(255), 
+    OUT max_value FLOAT, 
+    OUT min_value FLOAT
+)
+BEGIN
+    -- Construct and execute dynamic SQL for calculating MAX
+    SET @query_max = CONCAT('SELECT MAX(', column_name, ') INTO @max FROM walmart_sales_backup');
+    PREPARE stmt_max FROM @query_max;
+    EXECUTE stmt_max;
+    DEALLOCATE PREPARE stmt_max;
+    -- Construct and execute dynamic SQL for calculating MIN
+    SET @query_min = CONCAT('SELECT MIN(', column_name, ') INTO @min FROM walmart_sales_backup');
+    PREPARE stmt_min FROM @query_min;
+    EXECUTE stmt_min;
+    DEALLOCATE PREPARE stmt_min;
+    -- Assign the results to output parameters
+    SET max_value = @max;
+    SET min_value = @min;
+END;
+//
+DELIMITER ;
+# Call the procedure and Retrive the results for Weekly sales
+CALL calculate_max_min('Weekly_Sales', @weekly_sales_max, @weekly_sales_min);
+SELECT @weekly_sales_max AS Maximum_Weekly_Sales, @weekly_sales_min AS Minimum_Weekly_Sales;
+# For Temperature
+CALL calculate_max_min('Temperature', @temperature_max, @temperature_min);
+SELECT @temperature_max AS Maximum_Temperature, @temperature_min AS Minimum_Temperature;
+# For Fuel Price
+CALL calculate_max_min('Fuel_Price', @Fuel_Price_max, @Fuel_Price_min);
+SELECT @Fuel_Price_max AS Maximum_Fuel_Price, @Fuel_Price_min AS Minimum_Fuel_Price;
+ # For CPI
+CALL calculate_max_min('CPI', @CPI_max, @CPI_min);
+SELECT @CPI_max AS Maximum_CPI, @CPI_min AS Minimum_CPI;
+ # For Unemployment
+CALL calculate_max_min('Unemployment', @Unemployment_max, @Unemployment_min);
+SELECT @Unemployment_max AS Maximum_Unemployment, @Unemployment_min AS Minimum_Unemployment;
+
+## CHECK THE HOLIDAY COLUMN AS SEEMS TO HAVE VALUES OF 0 AND 1S
+
+SELECT DISTINCT Holiday_Flag
+FROM walmart_sales_backup;
+
+
+# DATA EXPLORING 
+
+# Get the day and month name and year in separate columns
+## Create new columns
+ALTER TABLE walmart_sales_backup
+ADD COLUMN year VARCHAR(4),
+ADD COLUMN day VARCHAR(15),
+ADD COLUMN month VARCHAR(15);
+
+SELECT * FROM walmart_sales_backup LIMIT 2
+## Change the date format it is a string, now a datatime
+UPDATE walmart_sales_backup
+SET Date = DATE_FORMAT(STR_TO_DATE(Date, '%d-%m-%Y'), '%Y-%m-%d');
+## Fill out the year, day and month name.
+UPDATE walmart_sales_backup
+SET 
+    year = YEAR(Date),
+    day = dayname(Date),
+    month = MONTHNAME(Date);
+## Group the days from weekdays and weekends.
+### Create a new column
+ALTER TABLE walmart_sales_backup
+ADD COLUMN day_type VARCHAR(15)
+### Update the column with the weekend or weekday values
+UPDATE walmart_sales_backup
+SET Day_Type = 
+    CASE 
+        WHEN day IN ("Saturday", "Sunday") THEN "Weekend"
+        WHEN day IN ("Monday", "Tuesday", "Wednesdsay", "Thursday", "Friday") THEN "Weekday"
+        ELSE 'Unclassified'
+    END;
+
+## Allocate months for seasons
+### Create the column season
+ALTER TABLE walmart_sales_backup
+ADD COLUMN season VARCHAR(15)
+### Fill out the values
+UPDATE walmart_sales_backup
+SET Season = 
+    CASE 
+        WHEN month IN ("December", "January", "February") THEN "Winter"
+        WHEN month IN ("March", "April", "May") THEN "Spring"
+        WHEN month IN ("June", "July", "August") THEN "Summer"
+        WHEN month IN ("September", "October", "November") THEN "Autumn"
+        ELSE "Unknown"
+    END;
+
+# DATA EXPLORING 
+## Show the variables and 
+SHOW COLUMNS FROM walmart_sales_backup;
+
+## Relabel the holiday flag
+### Add column
+ALTER TABLE walmart_sales_backup
+ADD COLUMN Holiday VARCHAR(15)
+### Review the holiday dates, they are based on 0 and 1s
+SELECT *
+FROM walmart_sales_backup
+WHERE Holiday_Flag = "1" and Store = "1" and  year = "2010";
+#### populates 4 days, so it is considered 1 as a holiday
+### Update the column Holiday
+UPDATE walmart_sales_backup
+SET day_type = 
+    CASE
+        WHEN holiday_flag = "1" THEN "Bank Holiday"
+        WHEN holiday_flag = "0" THEN "Business Day"
+        ELSE "Unknown"
+    END;
+
+ALTER TABLE walmart_sales_backup
+CHANGE COLUMN holiday day_type VARCHAR(20);
+
+ALTER TABLE walmart_sales_backup
+drop column holiday; 
